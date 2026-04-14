@@ -1,8 +1,10 @@
 # AlphaFix — After Effects ProRes 4444 Alpha Repair Plugin
 
+![Black-Car-01](https://github.com/user-attachments/assets/54c993b8-560a-4f39-ac43-ea99a82401c2)
+
 ## The Problem
 
-When encoding ProRes 4444 with `-alpha_bits 8` via FFmpeg, Adobe After Effects (and Premiere Pro) incorrectly interprets the 8-bit alpha channel, producing black fringing and edge artifacts on transparent areas. Other applications (Nuke, DaVinci Resolve, etc.) import the same files correctly.
+When encoding ProRes 4444 with `-alpha_bits 8` via FFmpeg, or just random encounters, Adobe After Effects (and Premiere Pro) incorrectly interprets the 8-bit alpha channel, producing black fringing and edge artifacts on transparent areas. Other applications (Nuke, DaVinci Resolve, etc.) import the same files correctly.
 
 This is an Adobe-side decoder bug. The "Interpret Footage > Alpha" settings do not fix it.
 
