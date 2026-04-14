@@ -304,12 +304,37 @@ if(WIN32)
         endif()
     endforeach()
 
+    set(STAGING_RELEASE_DIR
+        "${CMAKE_SOURCE_DIR}/Release"
+        CACHE PATH "Root-level staging folder for packaged plugin files"
+    )
+
+    set(STAGING_RELEASE_DIR
+        "${CMAKE_SOURCE_DIR}/Release"
+        CACHE PATH "Root-level staging folder"
+    )
+
+    set(STAGING_SUPPORT_FILES_DIR
+        "${STAGING_RELEASE_DIR}/Support Files"
+    )
+
+    set(STAGING_PLUGIN_DIR
+        "${STAGING_SUPPORT_FILES_DIR}/Plug-ins/AlphaFix"
+    )
+
     add_custom_command(TARGET AlphaFix POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:AlphaFix>"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_SUPPORT_FILES_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_PLUGIN_DIR}"
+
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:AlphaFix>"
+            "${STAGING_PLUGIN_DIR}/"
+
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${REQUIRED_FFMPEG_DLLS}
-            "$<TARGET_FILE_DIR:AlphaFix>"
-        COMMENT "Copying required FFmpeg DLLs to Visual Studio output folder"
+            "${STAGING_SUPPORT_FILES_DIR}/"
+
+        COMMENT "Staging AE-style Support Files folder with AlphaFix.aex and FFmpeg DLLs"
         COMMAND_EXPAND_LISTS
     )
 

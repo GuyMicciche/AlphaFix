@@ -55,6 +55,10 @@ struct AlphaFixPreRenderData {
     PF_Boolean  removeColorMatting;
     A_long      frameOffset;
     PF_Boolean  debugLog;
+    PF_LRect    result_rect;    // Stashed from checkout during PreRender.
+                                // Used in SmartRender to offset alpha buffer
+                                // lookups when AE gives us a sub-region world
+                                // (happens when other effects are in the stack).
 };
 
 struct AlphaFixInstanceData {

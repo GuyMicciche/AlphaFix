@@ -177,15 +177,31 @@ static PF_Err GetLayerSourceFilePath(PF_InData* in_data, char* outPath, A_long m
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Bit-depth aware helpers
+// Bit-depth detection
+//
+// PF_EffectWorld pixel sizes:
+//   8bpc  — PF_Pixel      = 4 bytes  → rowbytes = width * 4
+//   16bpc — PF_Pixel16    = 8 bytes  → rowbytes = width * 8   (PF_WORLD_IS_DEEP)
+//   32bpc — PF_PixelFloat = 16 bytes → rowbytes = width * 16
+//
+// We check bytes-per-pixel derived from rowbytes first (most reliable),
+// then fall back to PF_WORLD_IS_DEEP for the 16-bit case.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 static int GetBitDepth(PF_EffectWorld* world)
 {
-    if (world->rowbytes >= world->width * 16)
+    if (world->width <= 0) return 8;
+    A_long bytesPerPixel = world->rowbytes / world->width;
+
+    // 32bpc float: 4 channels * 4 bytes = 16 bytes per pixel
+    if (bytesPerPixel >= 16)
         return 32;
-    if (PF_WORLD_IS_DEEP(world))
+
+    // 16bpc: 4 channels * 2 bytes = 8 bytes per pixel
+    if (bytesPerPixel >= 8 || PF_WORLD_IS_DEEP(world))
         return 16;
+
+    // 8bpc: 4 channels * 1 byte = 4 bytes per pixel
     return 8;
 }
 
@@ -198,6 +214,36 @@ static void CopyPixels(PF_EffectWorld* src, PF_EffectWorld* dst)
         A_long copyBytes = (src->rowbytes < dst->rowbytes) ? src->rowbytes : dst->rowbytes;
         memcpy(outRow, inRow, copyBytes);
     }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Render debug log helper
+// Writes to the same log file as the decoder when debugLog is enabled.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static void RenderLog(bool enabled, const char* fmt, ...)
+{
+    if (!enabled) return;
+    static FILE* f = nullptr;
+    if (!f) {
+#ifdef _WIN32
+        char path[512];
+        const char* tmp = getenv("TEMP");
+        if (!tmp) tmp = "C:\\Temp";
+        snprintf(path, sizeof(path), "%s\\AlphaFix_debug.log", tmp);
+        f = fopen(path, "a");   // append so decoder entries are preserved
+#else
+        f = fopen("/tmp/AlphaFix_debug.log", "a");
+#endif
+    }
+    if (!f) return;
+    va_list args;
+    va_start(args, fmt);
+    vfprintf(f, fmt, args);
+    va_end(args);
+    fprintf(f, "\n");
+    fflush(f);
 }
 
 
@@ -266,6 +312,11 @@ static PF_Err PreRender(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderEx
             preData->debugLog = p.u.bd.value;
             PF_CHECKIN_PARAM(in_data, &p);
 
+            // Stash the checkout result_rect so SmartRender can use it as an
+            // offset into the full-frame alpha buffer. PF_SmartRenderExtra has
+            // no result_rect member, so this is the only way to pass it through.
+            preData->result_rect = checkout.result_rect;
+
             UnlockHandle(in_data, preDataH);
         }
         extra->output->pre_render_data = preDataH;
@@ -276,7 +327,20 @@ static PF_Err PreRender(PF_InData* in_data, PF_OutData* out_data, PF_PreRenderEx
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SmartFX: SmartRender — 8/16/32 bpc with pre-process unmult
+// SmartFX: SmartRender — 8/16/32 bpc
+//
+// Alpha buffer coordinate mapping
+// ─────────────────────────────────
+// The alpha buffer from FFmpeg is always the full source frame (alphaWidth x
+// alphaHeight). The outputWorld AE gives us during SmartFX may be a sub-region
+// of that frame — its top-left corner in frame space is result_rect.left/top.
+//
+// We therefore address the alpha buffer as:
+//   alphaBuffer[(originY + y) * alphaWidth + (originX + x)]
+//
+// When AlphaFix is the only effect, origin is {0,0} and this is identical to
+// the old direct index. When other effects are present, origin may be non-zero
+// and the old scaling math (y/outH * alphaHeight) would sample the wrong rows.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRenderExtra* extra)
@@ -324,10 +388,8 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
     }
     decoder->debugLog = preData->debugLog ? true : false;
 
-    // Compute frame number from AE time values.
-    // current_time and time_scale are integers — use them directly to avoid
-    // float truncation errors (e.g. 122.9999 → 122 instead of 123).
-    // Round instead of truncate: add 0.5 before casting.
+    // Compute frame number from AE time values using integer math + rounding
+    // to avoid float truncation (e.g. 122.9999 → 122 instead of 123).
     A_long frameNum = static_cast<A_long>(
         (static_cast<double>(in_data->current_time) /
          static_cast<double>(in_data->time_scale)) * decoder->fps + 0.5);
@@ -348,24 +410,54 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
         return PF_Err_NONE;
     }
 
+    // ── Determine bit depth ──────────────────────────────────────────────────
     int bitDepth = GetBitDepth(outputWorld);
+
+    // ── Render region origin in frame space ──────────────────────────────────
+    // result_rect was stashed in PreRender from checkout.result_rect.
+    // This is the top-left corner of outputWorld in full-frame coordinates.
+    A_long originX = preData->result_rect.left;
+    A_long originY = preData->result_rect.top;
+
     A_long outW = outputWorld->width;
     A_long outH = outputWorld->height;
 
+    // ── Debug: log render geometry once per render call ───────────────────────
+    RenderLog(preData->debugLog,
+        "======== SMART_RENDER frame=%ld ========", (long)frameNum);
+    RenderLog(preData->debugLog,
+        "  bitDepth     = %d  (rowbytes=%ld  width=%ld  bytes/px=%ld)",
+        bitDepth, (long)outputWorld->rowbytes, (long)outputWorld->width,
+        outputWorld->width > 0 ? (long)(outputWorld->rowbytes / outputWorld->width) : -1);
+    RenderLog(preData->debugLog,
+        "  outputWorld  = %ld x %ld", (long)outW, (long)outH);
+    RenderLog(preData->debugLog,
+        "  alphaBuffer  = %ld x %ld", (long)alphaWidth, (long)alphaHeight);
+    RenderLog(preData->debugLog,
+        "  result_rect  = {L=%ld T=%ld R=%ld B=%ld}",
+        (long)preData->result_rect.left, (long)preData->result_rect.top,
+        (long)preData->result_rect.right, (long)preData->result_rect.bottom);
+    RenderLog(preData->debugLog,
+        "  origin       = (%ld, %ld)", (long)originX, (long)originY);
+
+    // ── Per-pixel loop ────────────────────────────────────────────────────────
     for (A_long y = 0; y < outH; y++) {
-        A_long srcY = (alphaHeight != outH)
-            ? static_cast<A_long>((static_cast<double>(y) / outH) * alphaHeight) : y;
+
+        // Map output pixel row → alpha buffer row using frame-space origin.
+        A_long srcY = originY + y;
+        if (srcY < 0)           srcY = 0;
         if (srcY >= alphaHeight) srcY = alphaHeight - 1;
 
         if (bitDepth == 32) {
+            // ── 32 bpc float ─────────────────────────────────────────────────
             PF_PixelFloat* inRow = reinterpret_cast<PF_PixelFloat*>(
                 reinterpret_cast<char*>(inputWorld->data) + y * inputWorld->rowbytes);
             PF_PixelFloat* outRow = reinterpret_cast<PF_PixelFloat*>(
                 reinterpret_cast<char*>(outputWorld->data) + y * outputWorld->rowbytes);
 
             for (A_long x = 0; x < outW; x++) {
-                A_long srcX = (alphaWidth != outW)
-                    ? static_cast<A_long>((static_cast<double>(x) / outW) * alphaWidth) : x;
+                A_long srcX = originX + x;
+                if (srcX < 0)           srcX = 0;
                 if (srcX >= alphaWidth) srcX = alphaWidth - 1;
 
                 PF_FpShort correctAlphaF = alphaBuffer[srcY * alphaWidth + srcX] / 255.0f;
@@ -376,7 +468,6 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     outRow[x].red = outRow[x].green = outRow[x].blue = correctAlphaF;
                     outRow[x].alpha = 1.0f;
                 } else {
-                    // Step 1: Apply alpha fix
                     PF_FpShort newA = correctAlphaF;
                     switch (preData->blendMode) {
                         case BLEND_REPLACE:  newA = correctAlphaF; break;
@@ -386,24 +477,27 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     }
                     outRow[x].alpha = newA;
 
-                    // Step 2: Remove color matting using the CORRECTED alpha
                     if (preData->removeColorMatting && newA > 0.0f && newA < 1.0f) {
                         r /= newA; g /= newA; b /= newA;
-                        if (r > 1.0f) r = 1.0f; if (g > 1.0f) g = 1.0f; if (b > 1.0f) b = 1.0f;
+                        if (r > 1.0f) r = 1.0f;
+                        if (g > 1.0f) g = 1.0f;
+                        if (b > 1.0f) b = 1.0f;
                     }
                     outRow[x].red = r; outRow[x].green = g; outRow[x].blue = b;
                 }
             }
 
         } else if (bitDepth == 16) {
+            // ── 16 bpc ───────────────────────────────────────────────────────
+            // AE 16-bit uses 0–32768 (not 0–65535).
             PF_Pixel16* inRow = reinterpret_cast<PF_Pixel16*>(
                 reinterpret_cast<char*>(inputWorld->data) + y * inputWorld->rowbytes);
             PF_Pixel16* outRow = reinterpret_cast<PF_Pixel16*>(
                 reinterpret_cast<char*>(outputWorld->data) + y * outputWorld->rowbytes);
 
             for (A_long x = 0; x < outW; x++) {
-                A_long srcX = (alphaWidth != outW)
-                    ? static_cast<A_long>((static_cast<double>(x) / outW) * alphaWidth) : x;
+                A_long srcX = originX + x;
+                if (srcX < 0)           srcX = 0;
                 if (srcX >= alphaWidth) srcX = alphaWidth - 1;
 
                 A_u_short correctA16 = static_cast<A_u_short>(
@@ -415,7 +509,6 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     outRow[x].red = outRow[x].green = outRow[x].blue = correctA16;
                     outRow[x].alpha = 32768;
                 } else {
-                    // Step 1: Apply alpha fix
                     A_u_short newA16 = correctA16;
                     switch (preData->blendMode) {
                         case BLEND_REPLACE:  newA16 = correctA16; break;
@@ -425,7 +518,6 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     }
                     outRow[x].alpha = newA16;
 
-                    // Step 2: Remove color matting using CORRECTED alpha
                     if (preData->removeColorMatting && newA16 > 0 && newA16 < 32768) {
                         A_long sR = (A_long)r * 32768 / newA16;
                         A_long sG = (A_long)g * 32768 / newA16;
@@ -439,14 +531,15 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
             }
 
         } else {
+            // ── 8 bpc ────────────────────────────────────────────────────────
             PF_Pixel* inRow = reinterpret_cast<PF_Pixel*>(
                 reinterpret_cast<char*>(inputWorld->data) + y * inputWorld->rowbytes);
             PF_Pixel* outRow = reinterpret_cast<PF_Pixel*>(
                 reinterpret_cast<char*>(outputWorld->data) + y * outputWorld->rowbytes);
 
             for (A_long x = 0; x < outW; x++) {
-                A_long srcX = (alphaWidth != outW)
-                    ? static_cast<A_long>((static_cast<double>(x) / outW) * alphaWidth) : x;
+                A_long srcX = originX + x;
+                if (srcX < 0)           srcX = 0;
                 if (srcX >= alphaWidth) srcX = alphaWidth - 1;
 
                 uint8_t correctAlpha = alphaBuffer[srcY * alphaWidth + srcX];
@@ -457,7 +550,6 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     outRow[x].red = outRow[x].green = outRow[x].blue = correctAlpha;
                     outRow[x].alpha = 255;
                 } else {
-                    // Step 1: Apply alpha fix
                     A_u_char newAlpha = correctAlpha;
                     switch (preData->blendMode) {
                         case BLEND_REPLACE:  newAlpha = correctAlpha; break;
@@ -467,7 +559,6 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
                     }
                     outRow[x].alpha = newAlpha;
 
-                    // Step 2: Remove color matting using CORRECTED alpha
                     if (preData->removeColorMatting && newAlpha > 0 && newAlpha < 255) {
                         A_long sR = (A_long)r * 255 / newAlpha;
                         A_long sG = (A_long)g * 255 / newAlpha;
