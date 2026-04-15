@@ -2,10 +2,8 @@
 #include "AE_EffectVers.h"
 
 #ifndef AE_OS_WIN
-    #include <CoreServices/CoreServices.r>
+	#include <AE_General.r>
 #endif
-
-#include "AE_General.r"
 
 resource 'PiPL' (16000) {
     {
@@ -21,22 +19,14 @@ resource 'PiPL' (16000) {
 
 #ifdef AE_OS_WIN
     #ifdef AE_PROC_INTELx64
-        CodeWin64X86 {
-            "EffectMain"
-        },
+        CodeWin64X86 {"EffectMain"},
     #endif
     #ifdef AE_OS_ARM64
-        CodeWinARM64 {
-            "EffectMain"
-        },
+        CodeWinARM64 {"EffectMain"},
     #endif
 #else
-        CodeMacIntel64 {
-            "EffectMain"
-        },
-        CodeMacARM64 {
-            "EffectMain"
-        },
+        CodeMacIntel64 {"EffectMain"},
+        CodeMacARM64 {"EffectMain"},
 #endif
 
         AE_PiPL_Version {
@@ -54,13 +44,13 @@ resource 'PiPL' (16000) {
             0
         },
         AE_Effect_Global_OutFlags {
-            0x02000000
+            0x2000004
         },
         AE_Effect_Global_OutFlags_2 {
             0x08001400
         },
         AE_Effect_Match_Name {
-            "GuyDev_AlphaFix"
+            "ADBE AlphaFix"
         },
         AE_Reserved_Info {
             0

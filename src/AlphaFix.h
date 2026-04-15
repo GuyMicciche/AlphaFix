@@ -24,7 +24,7 @@
 #endif
 
 #define ALPHAFIX_NAME           "AlphaFix"
-#define ALPHAFIX_MATCH_NAME     "GuyDev_AlphaFix"
+#define ALPHAFIX_MATCH_NAME     "ADBE AlphaFix"
 #define ALPHAFIX_MAJOR_VERSION  1
 #define ALPHAFIX_MINOR_VERSION  0
 #define ALPHAFIX_BUG_VERSION    0

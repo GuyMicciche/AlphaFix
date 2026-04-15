@@ -6,6 +6,8 @@
 #include <cmath>
 #include <string>
 
+// ── Global plugin ID — registered once in GlobalSetup, reused everywhere ────
+static AEGP_PluginID g_PluginID = 0;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Handle Suite Helpers
@@ -70,10 +72,17 @@ static PF_Err GlobalSetup(PF_InData* in_data, PF_OutData* out_data)
         ALPHAFIX_MAJOR_VERSION, ALPHAFIX_MINOR_VERSION,
         ALPHAFIX_BUG_VERSION, PF_Stage_DEVELOP, ALPHAFIX_BUILD_VERSION);
 
-    out_data->out_flags  = PF_OutFlag_DEEP_COLOR_AWARE;
+    out_data->out_flags  = PF_OutFlag_DEEP_COLOR_AWARE | PF_OutFlag_NON_PARAM_VARY;
     out_data->out_flags2 = PF_OutFlag2_SUPPORTS_SMART_RENDER |
                            PF_OutFlag2_FLOAT_COLOR_AWARE |
                            PF_OutFlag2_SUPPORTS_THREADED_RENDERING;
+
+    // Register once here — g_PluginID is reused by GetLayerSourceFilePath
+    // on every render call
+    AEGP_SuiteHandler suites(in_data->pica_basicP);
+    suites.UtilitySuite6()->AEGP_RegisterWithAEGP(
+        nullptr, ALPHAFIX_NAME, &g_PluginID);
+
     return PF_Err_NONE;
 }
 
@@ -120,9 +129,8 @@ static PF_Err GetLayerSourceFilePath(PF_InData* in_data, char* outPath, A_long m
     PF_Err err = PF_Err_NONE;
     AEGP_SuiteHandler suites(in_data->pica_basicP);
 
-    AEGP_PluginID pluginId = 0;
-    ERR(suites.UtilitySuite6()->AEGP_RegisterWithAEGP(nullptr, "AlphaFix", &pluginId));
-    if (err) return err;
+    AEGP_PluginID pluginId = g_PluginID;
+    if (!pluginId) return PF_Err_INTERNAL_STRUCT_DAMAGED;
 
     AEGP_EffectRefH effectRef = nullptr;
     ERR(suites.PFInterfaceSuite1()->AEGP_GetNewEffectForEffect(
@@ -173,6 +181,70 @@ static PF_Err GetLayerSourceFilePath(PF_InData* in_data, char* outPath, A_long m
 
     suites.EffectSuite4()->AEGP_DisposeEffect(effectRef);
     return err;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helper: Get source footage time in seconds
+//
+// For plain layers and time-stretched layers, current_time is already correct —
+// AE folds stretch into it before calling the effect.
+// For time-remapped layers, current_time is still comp time and we must
+// evaluate the TIME_REMAP stream ourselves to get the actual source time.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+static double GetLayerSourceTimeSeconds(PF_InData* in_data)
+{
+    double fallback = static_cast<double>(in_data->current_time) /
+                      static_cast<double>(in_data->time_scale);
+
+    if (!g_PluginID) return fallback;
+
+    AEGP_SuiteHandler suites(in_data->pica_basicP);
+
+    AEGP_LayerH layerH = nullptr;
+    if (suites.PFInterfaceSuite1()->AEGP_GetEffectLayer(
+            in_data->effect_ref, &layerH) != A_Err_NONE || !layerH)
+        return fallback;
+
+    // Check if the user explicitly enabled Time Remapping via the Layer menu.
+    // AEGP_GetLayerFlags returns a bitmask — AEGP_LayerFlag_TIME_REMAPPING
+    // is only set when the user turned it on, unlike the stream which exists
+    // for time-stretched layers too.
+    AEGP_LayerFlags layerFlags = AEGP_LayerFlag_NONE;
+    if (suites.LayerSuite8()->AEGP_GetLayerFlags(
+            layerH, &layerFlags) != A_Err_NONE)
+        return fallback;
+
+    if (!(layerFlags & AEGP_LayerFlag_TIME_REMAPPING))
+        return fallback;   // Time stretch or plain — current_time is correct
+
+    // User-enabled Time Remapping — evaluate the stream at comp time
+    AEGP_StreamRefH remapStream = nullptr;
+    if (suites.StreamSuite5()->AEGP_GetNewLayerStream(
+            g_PluginID, layerH,
+            AEGP_LayerStream_TIME_REMAP,
+            &remapStream) != A_Err_NONE || !remapStream)
+        return fallback;
+
+    A_Time compTime = { in_data->current_time, in_data->time_scale };
+    AEGP_StreamValue2 val;
+    AEFX_CLR_STRUCT(val);
+
+    double result = fallback;
+    if (suites.StreamSuite5()->AEGP_GetNewStreamValue(
+            g_PluginID,
+            remapStream,
+            AEGP_LTimeMode_CompTime,
+            &compTime,
+            FALSE,
+            &val) == A_Err_NONE)
+    {
+        result = val.val.one_d;
+        suites.StreamSuite5()->AEGP_DisposeStreamValue(&val);
+    }
+
+    suites.StreamSuite5()->AEGP_DisposeStream(remapStream);
+    return result;
 }
 
 
@@ -390,9 +462,9 @@ static PF_Err SmartRender(PF_InData* in_data, PF_OutData* out_data, PF_SmartRend
 
     // Compute frame number from AE time values using integer math + rounding
     // to avoid float truncation (e.g. 122.9999 → 122 instead of 123).
-    A_long frameNum = static_cast<A_long>(
-        (static_cast<double>(in_data->current_time) /
-         static_cast<double>(in_data->time_scale)) * decoder->fps + 0.5);
+    // Queries the actual source footage time, respects Time Remapping
+    double sourceTimeSecs = GetLayerSourceTimeSeconds(in_data);
+    A_long frameNum = static_cast<A_long>(sourceTimeSecs * decoder->fps + 0.5);
     frameNum += preData->frameOffset;
     if (frameNum < 0) frameNum = 0;
 

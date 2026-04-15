@@ -334,7 +334,11 @@ if(WIN32)
             ${REQUIRED_FFMPEG_DLLS}
             "${STAGING_SUPPORT_FILES_DIR}/"
 
-        COMMENT "Staging AE-style Support Files folder with AlphaFix.aex and FFmpeg DLLs"
+        # Zip the staged Release folder into Release.zip at the project root
+        COMMAND ${CMAKE_COMMAND} -E tar "cf" "${CMAKE_SOURCE_DIR}/Release.zip" --format=zip
+            "${STAGING_RELEASE_DIR}"
+
+        COMMENT "Staging AE-style Support Files folder with AlphaFix.aex and FFmpeg DLLs, and creating Release.zip"
         COMMAND_EXPAND_LISTS
     )
 
