@@ -339,9 +339,9 @@ if(WIN32)
     )
 
     add_custom_command(TARGET AlphaFix POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E tar "cf" "${CMAKE_SOURCE_DIR}/Release.zip" --format=zip "."
+        COMMAND ${CMAKE_COMMAND} -E tar "cf" "${CMAKE_SOURCE_DIR}/Release_v${PROJECT_VERSION}.zip" --format=zip "."
         WORKING_DIRECTORY "${STAGING_RELEASE_DIR}"
-        COMMENT "Creating Release.zip"
+        COMMENT "Creating Release_v${PROJECT_VERSION}.zip"
     )
 
 elseif(APPLE)
