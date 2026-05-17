@@ -160,6 +160,95 @@ if(WIN32)
     set(PIPL_RC_FILE "${PIPL_RC_OUTPUT}")
 endif()
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Regenerate MSVC-format import libs from FFmpeg DLLs
+#
+# Many pre-built "shared" FFmpeg distributions ship MinGW/dlltool-format .lib
+# files. They link for normal imports but cannot be /DELAYLOAD'd by link.exe
+# (LNK4199 "no imports found"). We work around that here by generating proper
+# MSVC import libs once at configure time.
+# ══════════════════════════════════════════════════════════════════════════════
+
+if(WIN32)
+    set(FFMPEG_DLLS_TO_FIX
+        "avformat-62"
+        "avcodec-62"
+        "avutil-60"
+        "swscale-9"
+        "swresample-6"
+    )
+
+    set(FFMPEG_MSVC_LIB_DIR "${CMAKE_BINARY_DIR}/ffmpeg_msvc_libs")
+    file(MAKE_DIRECTORY "${FFMPEG_MSVC_LIB_DIR}")
+
+    # Find lib.exe and dumpbin.exe (ship with MSVC, on PATH inside the
+    # Developer Command Prompt; CMake's find_program handles both cases)
+    find_program(MSVC_LIB_TOOL     lib     REQUIRED)
+    find_program(MSVC_DUMPBIN_TOOL dumpbin REQUIRED)
+
+    set(GENERATED_FFMPEG_LIBS "")
+
+    foreach(DLL_BASE ${FFMPEG_DLLS_TO_FIX})
+        set(SRC_DLL "${FFMPEG_PATH}/bin/${DLL_BASE}.dll")
+        set(OUT_DEF "${FFMPEG_MSVC_LIB_DIR}/${DLL_BASE}.def")
+        set(OUT_LIB "${FFMPEG_MSVC_LIB_DIR}/${DLL_BASE}.lib")
+        set(OUT_EXP "${FFMPEG_MSVC_LIB_DIR}/${DLL_BASE}.exp")
+
+        if(NOT EXISTS "${SRC_DLL}")
+            message(FATAL_ERROR
+                "FFmpeg DLL not found: ${SRC_DLL}\n"
+                "Make sure you've extracted the FFmpeg shared build to "
+                "${FFMPEG_PATH}/bin/")
+        endif()
+
+        # Only regenerate if the .lib is missing OR older than its DLL
+        if(NOT EXISTS "${OUT_LIB}" OR "${SRC_DLL}" IS_NEWER_THAN "${OUT_LIB}")
+            message(STATUS "Generating MSVC import lib for ${DLL_BASE}.dll")
+
+            # Step 1: dumpbin /exports to a temp file
+            execute_process(
+                COMMAND "${MSVC_DUMPBIN_TOOL}" /exports "${SRC_DLL}"
+                OUTPUT_VARIABLE DUMP_OUTPUT
+                RESULT_VARIABLE DUMP_RESULT
+            )
+            if(NOT DUMP_RESULT EQUAL 0)
+                message(FATAL_ERROR "dumpbin failed on ${SRC_DLL}")
+            endif()
+
+            # Step 2: parse export names out of dumpbin output.
+            # Lines look like:  "    1    0  00001234  av_function_name"
+            # We want just the symbol in the last column.
+            set(DEF_CONTENT "LIBRARY \"${DLL_BASE}.dll\"\nEXPORTS\n")
+            string(REPLACE "\n" ";" DUMP_LINES "${DUMP_OUTPUT}")
+            foreach(LINE ${DUMP_LINES})
+                if(LINE MATCHES "^[ \t]+[0-9]+[ \t]+[0-9A-Fa-f]+[ \t]+[0-9A-Fa-f]+[ \t]+([A-Za-z_][A-Za-z0-9_@?$]*)")
+                    string(APPEND DEF_CONTENT "    ${CMAKE_MATCH_1}\n")
+                endif()
+            endforeach()
+
+            file(WRITE "${OUT_DEF}" "${DEF_CONTENT}")
+
+            # Step 3: run lib /def: to produce the real .lib
+            execute_process(
+                COMMAND "${MSVC_LIB_TOOL}"
+                        "/def:${OUT_DEF}"
+                        "/out:${OUT_LIB}"
+                        "/machine:x64"
+                        "/nologo"
+                RESULT_VARIABLE LIB_RESULT
+                OUTPUT_QUIET
+            )
+            if(NOT LIB_RESULT EQUAL 0)
+                message(FATAL_ERROR "lib.exe failed for ${DLL_BASE}")
+            endif()
+        endif()
+
+        list(APPEND GENERATED_FFMPEG_LIBS "${OUT_LIB}")
+    endforeach()
+
+    message(STATUS "Generated MSVC FFmpeg import libs in: ${FFMPEG_MSVC_LIB_DIR}")
+endif()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Build Target
@@ -185,8 +274,8 @@ if(WIN32)
         "/DELAYLOAD:avformat-62.dll"
         "/DELAYLOAD:avcodec-62.dll"
         "/DELAYLOAD:avutil-60.dll"
-        "/DELAYLOAD:swscale-9.dll"
         "/DELAYLOAD:swresample-6.dll"
+        "/DELAYLOAD:swscale-9.dll"
     )
 
     target_compile_definitions(AlphaFix PRIVATE
@@ -199,10 +288,7 @@ if(WIN32)
     )
 
     target_link_libraries(AlphaFix PRIVATE
-        "${FFMPEG_PATH}/lib/avformat.lib"
-        "${FFMPEG_PATH}/lib/avcodec.lib"
-        "${FFMPEG_PATH}/lib/avutil.lib"
-        "${FFMPEG_PATH}/lib/swscale.lib"
+        ${GENERATED_FFMPEG_LIBS}
         delayimp.lib
     )
 
@@ -279,9 +365,9 @@ target_include_directories(AlphaFix PRIVATE
 if(WIN32)
     set(REQUIRED_FFMPEG_DLLS
         "${FFMPEG_PATH}/bin/avutil-60.dll"
-        "${FFMPEG_PATH}/bin/swresample-6.dll"
         "${FFMPEG_PATH}/bin/avcodec-62.dll"
         "${FFMPEG_PATH}/bin/avformat-62.dll"
+        "${FFMPEG_PATH}/bin/swresample-6.dll"
         "${FFMPEG_PATH}/bin/swscale-9.dll"
     )
 
@@ -322,9 +408,14 @@ if(WIN32)
         "${STAGING_SUPPORT_FILES_DIR}/Plug-ins/AlphaFix"
     )
 
+    set(STAGING_FFMPEG_DIR
+        "${STAGING_PLUGIN_DIR}/alphafix.ffmpeg"
+    )
+
     add_custom_command(TARGET AlphaFix POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_SUPPORT_FILES_DIR}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_PLUGIN_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${STAGING_FFMPEG_DIR}"
 
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:AlphaFix>"
@@ -332,9 +423,9 @@ if(WIN32)
 
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${REQUIRED_FFMPEG_DLLS}
-            "${STAGING_SUPPORT_FILES_DIR}/"
+            "${STAGING_FFMPEG_DIR}/"
 
-        COMMENT "Staging AE-style Support Files folder with AlphaFix.aex and FFmpeg DLLs"
+        COMMENT "Staging AlphaFix.aex + FFmpeg DLLs into alphafix.ffmpeg subfolder"
         COMMAND_EXPAND_LISTS
     )
 
@@ -362,7 +453,11 @@ install(TARGETS AlphaFix
 )
 
 if(WIN32)
-    install(FILES ${REQUIRED_FFMPEG_DLLS} DESTINATION "${AE_DLL_INSTALL_DIR}")
+    set(AE_FFMPEG_INSTALL_DIR
+        "${AE_PLUGIN_INSTALL_DIR}/alphafix.ffmpeg"
+        CACHE PATH "Directory for FFmpeg DLLs (next to .aex)"
+    )
+    install(FILES ${REQUIRED_FFMPEG_DLLS} DESTINATION "${AE_FFMPEG_INSTALL_DIR}")
 endif()
 
 

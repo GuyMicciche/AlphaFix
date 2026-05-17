@@ -70,23 +70,26 @@ struct AlphaFixInstanceData {
     void*       ffmpegContext;
 };
 
+// DLL search path setup — call once during GlobalSetup
+bool AlphaFix_LoadFFmpegDLLs();
+
 extern "C" {
 
-ALPHAFIX_API PF_Err PluginDataEntryFunction(
-    PF_PluginDataPtr    inPtr,
-    PF_PluginDataCB     inPluginDataCallBackPtr,
-    SPBasicSuite*       inSPBasicSuitePtr,
-    const char*         inHostName,
-    const char*         inHostVersion
-);
+    ALPHAFIX_API PF_Err PluginDataEntryFunction(
+        PF_PluginDataPtr    inPtr,
+        PF_PluginDataCB     inPluginDataCallBackPtr,
+        SPBasicSuite*       inSPBasicSuitePtr,
+        const char*         inHostName,
+        const char*         inHostVersion
+    );
 
-ALPHAFIX_API PF_Err EffectMain(
-    PF_Cmd          cmd,
-    PF_InData*      in_data,
-    PF_OutData*     out_data,
-    PF_ParamDef*    params[],
-    PF_LayerDef*    output,
-    void*           extra
-);
+    ALPHAFIX_API PF_Err EffectMain(
+        PF_Cmd          cmd,
+        PF_InData*      in_data,
+        PF_OutData*     out_data,
+        PF_ParamDef*    params[],
+        PF_LayerDef*    output,
+        void*           extra
+    );
 
 }

@@ -41,6 +41,34 @@ static void DisposeHandle(PF_InData* in_data, PF_Handle h)
     suite->host_dispose_handle(h);
 }
 
+#include <pathcch.h>    // For PathCchRemoveFileSpec
+#pragma comment(lib, "pathcch.lib")
+
+bool AlphaFix_LoadFFmpegDLLs()
+{
+    wchar_t modulePath[MAX_PATH] = {};
+    HMODULE hSelf = nullptr;
+
+    if (!GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(&AlphaFix_LoadFFmpegDLLs),
+            &hSelf) || !hSelf) {
+        return false;
+    }
+
+    if (GetModuleFileNameW(hSelf, modulePath, MAX_PATH) == 0) {
+        return false;
+    }
+
+    PathCchRemoveFileSpec(modulePath, MAX_PATH);
+
+    wchar_t ffmpegDir[MAX_PATH] = {};
+    _snwprintf_s(ffmpegDir, MAX_PATH, _TRUNCATE,
+        L"%s\\alphafix.ffmpeg", modulePath);
+
+    return SetDllDirectoryW(ffmpegDir) != 0;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Plugin Data Entry
@@ -67,7 +95,7 @@ extern "C" ALPHAFIX_API PF_Err PluginDataEntryFunction(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 static PF_Err GlobalSetup(PF_InData* in_data, PF_OutData* out_data)
-{
+{    
     out_data->my_version = PF_VERSION(
         ALPHAFIX_MAJOR_VERSION, ALPHAFIX_MINOR_VERSION,
         ALPHAFIX_BUG_VERSION, PF_Stage_DEVELOP, ALPHAFIX_BUILD_VERSION);
@@ -690,6 +718,8 @@ extern "C" ALPHAFIX_API PF_Err EffectMain(
                     ALPHAFIX_NAME, ALPHAFIX_MAJOR_VERSION, ALPHAFIX_MINOR_VERSION);
                 break;
             case PF_Cmd_GLOBAL_SETUP:
+                if (!AlphaFix_LoadFFmpegDLLs())
+                    return PF_Err_INTERNAL_STRUCT_DAMAGED;
                 err = GlobalSetup(in_data, out_data);
                 break;
             case PF_Cmd_GLOBAL_SETDOWN:
