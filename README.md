@@ -95,11 +95,14 @@ You need at minimum: `avformat`, `avcodec`, `avutil`, `swscale`.
 
 ### Windows Build
 
-Once both dependencies are extracted, run `buildwin.bat` **as Administrator** from the project root, or build manually using **x64 Native Tools Command Prompt for VS 2022**:
+Once both dependencies are extracted, run `buildwin.bat` **as Administrator** from the project root, or build manually using `x64 Native Tools Command Prompt for VS 2022`` **Run as Administrator**:
 
 ```bat
 set AE_SDK=AfterEffectsSDK
 set FFMPEG=ffmpeg-shared
+
+call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+cd /d "%~dp0"
 
 cmake -B build -S . -G "Visual Studio 17 2022" -A x64 ^
     -DAE_SDK_PATH="%AE_SDK%" ^
