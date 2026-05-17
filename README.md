@@ -95,7 +95,7 @@ You need at minimum: `avformat`, `avcodec`, `avutil`, `swscale`.
 
 ### Windows Build
 
-Once both dependencies are extracted, run `buildwin.bat` from the project root, or build manually:
+Once both dependencies are extracted, run `buildwin.bat` **as Administrator** from the project root, or build manually using **x64 Native Tools Command Prompt for VS 2022**:
 
 ```bat
 set AE_SDK=AfterEffectsSDK

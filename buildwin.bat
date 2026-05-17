@@ -3,6 +3,10 @@ set "ROOT=%~dp0"
 set "AE_SDK=%ROOT%AfterEffectsSDK"
 set "FFMPEG=%ROOT%ffmpeg-shared"
 
+REM Set up VS build environment
+call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+cd /d "%~dp0"
+
 REM Configure
 cmake -B Win -S . -G "Visual Studio 17 2022" -A x64 ^
     -DAE_SDK_PATH="%AE_SDK%" ^
