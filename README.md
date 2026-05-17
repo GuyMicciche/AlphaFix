@@ -1,5 +1,7 @@
 # AlphaFix — After Effects ProRes 4444 Alpha Repair Plugin
 
+![GitHub Release](https://img.shields.io/github/v/release/GuyMicciche/AlphaFix?style=for-the-badge)
+
 ![Black-Car-01](https://github.com/user-attachments/assets/54c993b8-560a-4f39-ac43-ea99a82401c2)
 
 ## The Problem
