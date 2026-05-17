@@ -101,9 +101,6 @@ Once both dependencies are extracted, run `buildwin.bat` **as Administrator** fr
 set AE_SDK=AfterEffectsSDK
 set FFMPEG=ffmpeg-shared
 
-call "%ProgramFiles%\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-cd /d "%~dp0"
-
 cmake -B build -S . -G "Visual Studio 17 2022" -A x64 ^
     -DAE_SDK_PATH="%AE_SDK%" ^
     -DFFMPEG_PATH="%FFMPEG%"
